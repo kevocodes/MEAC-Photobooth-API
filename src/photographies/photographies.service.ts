@@ -7,7 +7,10 @@ import { generateRandomAlphanumericCode } from '../common/utils/code-generator';
 import { CloudinaryService } from '../config/cloudinary/cloudinary.service';
 import { PrismaService } from '../config/prisma/prisma.service';
 import { BANNED_WORDS } from '../common/constants/bannedWords';
-import { FindAllPhotographiesDto } from './dtos/photographies.dto';
+import {
+  ConfirmPrintedItemDto,
+  FindAllPhotographiesDto,
+} from './dtos/photographies.dto';
 
 @Injectable()
 export class PhotographiesService {
@@ -49,6 +52,8 @@ export class PhotographiesService {
           width: uploadedImage.width,
           height: uploadedImage.height,
           code: generateUniqueCode(),
+          printedAt: null,
+          printedQuantity: 0,
         },
       });
 
@@ -98,6 +103,8 @@ export class PhotographiesService {
         width: uploadedImage.width,
         height: uploadedImage.height,
         code: generateUniqueCode(),
+        printedAt: null,
+        printedQuantity: 0,
       }));
 
       // Insertar en la base de datos en batch
@@ -115,9 +122,21 @@ export class PhotographiesService {
   }
 
   async getPhotographies(query: FindAllPhotographiesDto) {
-    const { order = 'asc' } = query;
+    const { order = 'asc', printed } = query;
 
     const photographies = await this.prismaService.photography.findMany({
+      where: {
+        ...(printed === undefined
+          ? {}
+          : printed
+            ? { printedAt: { not: null } }
+            : {
+                OR: [
+                  { printedAt: null },
+                  { printedAt: { isSet: false } },
+                ],
+              }),
+      },
       orderBy: {
         createdAt: order,
       },
@@ -245,6 +264,51 @@ export class PhotographiesService {
     return {
       message: 'Photographies deleted successfully',
       data: null,
+    };
+  }
+
+  async confirmPrinted(items: ConfirmPrintedItemDto[]) {
+    if (!items.length) {
+      throw new BadRequestException('At least one photography is required');
+    }
+
+    const quantityById = items.reduce<Record<string, number>>((acc, item) => {
+      acc[item.id] = (acc[item.id] || 0) + item.quantity;
+      return acc;
+    }, {});
+    const uniqueIds = Object.keys(quantityById);
+    const photographies = await this.prismaService.photography.findMany({
+      where: {
+        id: {
+          in: uniqueIds,
+        },
+      },
+      select: {
+        id: true,
+        printedQuantity: true,
+      },
+    });
+
+    if (photographies.length !== uniqueIds.length) {
+      throw new NotFoundException('One or more photographies were not found');
+    }
+
+    const now = new Date();
+    await this.prismaService.$transaction(
+      photographies.map((photo) =>
+        this.prismaService.photography.update({
+          where: { id: photo.id },
+          data: {
+            printedAt: now,
+            printedQuantity: (photo.printedQuantity || 0) + quantityById[photo.id],
+          },
+        }),
+      ),
+    );
+
+    return {
+      data: null,
+      message: 'Photographies marked as printed successfully',
     };
   }
 }

@@ -17,6 +17,7 @@ import { ApiResponse } from '../common/types/response.type';
 import { getParseImagePipe } from '../common/utils/get-parse-file-pipe';
 import { MongoIdPipe } from '../common/pipes/mongo-id.pipe';
 import {
+  ConfirmPrintedPhotographiesDto,
   DeletePhotographiesByIdsDTO,
   FindAllPhotographiesDto,
 } from './dtos/photographies.dto';
@@ -73,6 +74,7 @@ export class PhotographiesController {
   }
 
   @ApiQuery({ name: 'order', required: false, type: 'string', enum: ['asc', 'desc'] })
+  @ApiQuery({ name: 'printed', required: false, type: 'boolean' })
   @Get()
   async getPhotographies(
     @Query() query: FindAllPhotographiesDto,
@@ -104,6 +106,13 @@ export class PhotographiesController {
     @Body() body: DeletePhotographiesByIdsDTO,
   ): Promise<ApiResponse> {
     return await this.photographiesService.deleteByIds(body.ids);
+  }
+
+  @Post('/confirm-printed')
+  async confirmPrinted(
+    @Body() body: ConfirmPrintedPhotographiesDto,
+  ): Promise<ApiResponse> {
+    return await this.photographiesService.confirmPrinted(body.items);
   }
 
   @Delete(':id')
