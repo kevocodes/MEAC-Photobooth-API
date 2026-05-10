@@ -21,6 +21,7 @@
     "vercel-build": "prisma generate && yarn build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
     "@nestjs/common": "^11.0.7",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.7",
@@ -37,7 +38,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "sharp": "^0.33.5",
-    "streamifier": "^0.1.1"
+    "streamifier": "^0.1.1",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.2",
@@ -50,6 +52,7 @@
     "@types/node": "^22.13.1",
     "@types/streamifier": "^0.1.2",
     "@types/supertest": "^6.0.2",
+    "@types/uuid": "^11.0.0",
     "@typescript-eslint/eslint-plugin": "^8.23.0",
     "@typescript-eslint/parser": "^8.23.0",
     "eslint": "^9.19.0",

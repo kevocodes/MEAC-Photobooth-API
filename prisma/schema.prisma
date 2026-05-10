@@ -7,6 +7,51 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Event {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  year      Int
+  isActive  Boolean  @default(true)
+  
+  frameUrl       String?
+  framePublicId  String?
+  frameWidth     Int?
+  frameHeight    Int?
+  
+  sampleUrl       String?
+  samplePublicId  String?
+  
+  photoX        Int      @default(0)
+  photoY        Int      @default(0)
+  photoWidth    Int      @default(400)
+  photoHeight   Int      @default(600)
+  baseWidth     Int?
+  baseHeight    Int?
+
+  // Print configuration
+  printOrientation  String   @default("landscape") // "landscape" | "portrait"
+  printPageSize     String   @default("LETTER")    // "LETTER" | "A4" | "LEGAL"
+  printColumns      Int      @default(2)
+  printRows         Int      @default(2)
+
+  // Code display configuration
+  codeShow          Boolean  @default(true)
+  codeX             Int      @default(10)
+  codeY             Int      @default(10)
+  codeColor         String   @default("#333333")
+  codeFontSize      Int      @default(10)
+  codeFontFamily    String   @default("Oswald")
+  codeFontWeight    String   @default("bold")
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  photographs Photography[]
+
+  @@unique([name, year])
+  @@map("events")
+}
+
 model Photography {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   code      String   @unique
@@ -17,6 +62,9 @@ model Photography {
   
   printedAt DateTime?
   printedQuantity Int?
+
+  eventId String? @db.ObjectId
+  event   Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

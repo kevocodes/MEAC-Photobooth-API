@@ -1,4 +1,5 @@
 import { Transform, Type } from 'class-transformer';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsBoolean,
@@ -12,10 +13,12 @@ import {
 } from 'class-validator';
 
 export class FindAllPhotographiesDto {
+  @ApiPropertyOptional({ enum: ['asc', 'desc'] })
   @IsOptional()
   @IsEnum({ asc: 'asc', desc: 'desc' })
   order?: 'asc' | 'desc';
 
+  @ApiPropertyOptional()
   @IsOptional()
   @Transform(({ value }) => {
     if (value === undefined || value === null || value === '') return undefined;
@@ -25,6 +28,11 @@ export class FindAllPhotographiesDto {
   })
   @IsBoolean()
   printed?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsMongoId()
+  eventId?: string;
 }
 
 export class DeletePhotographiesByIdsDTO {

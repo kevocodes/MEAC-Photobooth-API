@@ -4,9 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { generateRandomAlphanumericCode } from '../common/utils/code-generator';
-import { CloudinaryService } from '../config/cloudinary/cloudinary.service';
+import { StorageService } from '../config/storage/storage.service';
 import { PrismaService } from '../config/prisma/prisma.service';
 import { BANNED_WORDS } from '../common/constants/bannedWords';
+import { ImageProcessorService } from '../common/utils/image-processor.service';
 import {
   ConfirmPrintedItemDto,
   FindAllPhotographiesDto,
@@ -15,114 +16,139 @@ import {
 @Injectable()
 export class PhotographiesService {
   constructor(
-    public readonly prismaService: PrismaService,
-    public readonly cloudinaryService: CloudinaryService,
+    private readonly prismaService: PrismaService,
+    private readonly storageService: StorageService,
+    private readonly imageProcessorService: ImageProcessorService,
   ) {}
 
-  async uploadPhotography(image: Express.Multer.File) {
-    try {
-      const uploadedImage = await this.cloudinaryService.uploadFile(image);
-
-      // Generar códigos únicos para todas las imágenes
-      const codes = new Set<string>();
-      const existingCodes = new Set(
-        (
-          await this.prismaService.photography.findMany({
-            select: { code: true },
-          })
-        ).map((photo) => photo.code),
-      );
-
-      const generateUniqueCode = () => {
-        let code;
-        do {
-          code = generateRandomAlphanumericCode(3);
-        } while (
-          codes.has(code) ||
-          existingCodes.has(code) ||
-          BANNED_WORDS.includes(code)
-        );
-        codes.add(code);
-        return code;
-      };
-      const photography = await this.prismaService.photography.create({
-        data: {
-          url: uploadedImage.secure_url,
-          public_id: uploadedImage.public_id,
-          width: uploadedImage.width,
-          height: uploadedImage.height,
-          code: generateUniqueCode(),
-          printedAt: null,
-          printedQuantity: 0,
-        },
-      });
-
-      return {
-        data: photography,
-        message: 'Photography uploaded successfully',
-      };
-    } catch (error) {
-      throw new BadRequestException(error.message);
+  /**
+   * Gets the currently active event. Throws if none is active.
+   */
+  private async getActiveEvent() {
+    const event = await this.prismaService.event.findFirst({
+      where: { isActive: true },
+    });
+    if (!event) {
+      throw new BadRequestException('No active event. Please activate an event first.');
     }
+    return event;
+  }
+
+  /**
+   * Generates a semantic folder path for an event's assets.
+   */
+  private getEventFolder(event: { name: string; year: number }, subfolder: string): string {
+    const slug = event.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    return `events/${slug}-${event.year}/${subfolder}`;
+  }
+
+  async uploadPhotography(image: Express.Multer.File) {
+    const event = await this.getActiveEvent();
+    const folder = this.getEventFolder(event, 'photos');
+
+    const uploadedImage = await this.storageService.uploadFile(image, folder);
+
+    const code = await this.generateUniqueCode();
+
+    const photography = await this.prismaService.photography.create({
+      data: {
+        url: uploadedImage.url,
+        public_id: uploadedImage.publicId,
+        width: uploadedImage.width,
+        height: uploadedImage.height,
+        code,
+        printedAt: null,
+        printedQuantity: 0,
+        eventId: event.id,
+      },
+    });
+
+    return {
+      data: photography,
+      message: 'Photography uploaded successfully',
+    };
   }
 
   async uploadPhotographies(images: Express.Multer.File[]) {
-    try {
-      // Subir todas las imágenes a Cloudinary en paralelo
-      const uploadedImages = await Promise.all(
-        images.map((image) => this.cloudinaryService.uploadFile(image)),
-      );
+    const event = await this.getActiveEvent();
+    const folder = this.getEventFolder(event, 'photos');
 
-      // Generar códigos únicos para todas las imágenes
-      const codes = new Set<string>();
-      const existingCodes = new Set(
-        (
-          await this.prismaService.photography.findMany({
-            select: { code: true },
-          })
-        ).map((photo) => photo.code),
-      );
+    const uploadedImages = await Promise.all(
+      images.map((image) => this.storageService.uploadFile(image, folder)),
+    );
 
-      const generateUniqueCode = () => {
-        let code;
-        do {
-          code = generateRandomAlphanumericCode(3);
-        } while (
-          codes.has(code) ||
-          existingCodes.has(code) ||
-          BANNED_WORDS.includes(code)
-        );
-        codes.add(code);
-        return code;
-      };
+    const codes = await this.generateUniqueCodes(images.length);
 
-      // Crear objetos de datos para insertar en la base de datos
-      const photographiesData = uploadedImages.map((uploadedImage) => ({
-        url: uploadedImage.secure_url,
-        public_id: uploadedImage.public_id,
-        width: uploadedImage.width,
-        height: uploadedImage.height,
-        code: generateUniqueCode(),
-        printedAt: null,
-        printedQuantity: 0,
-      }));
+    const photographiesData = uploadedImages.map((uploadedImage, i) => ({
+      url: uploadedImage.url,
+      public_id: uploadedImage.publicId,
+      width: uploadedImage.width,
+      height: uploadedImage.height,
+      code: codes[i],
+      printedAt: null,
+      printedQuantity: 0,
+      eventId: event.id,
+    }));
 
-      // Insertar en la base de datos en batch
-      await this.prismaService.photography.createMany({
-        data: photographiesData,
-      });
+    await this.prismaService.photography.createMany({
+      data: photographiesData,
+    });
 
-      return {
-        data: photographiesData, // Devolver los datos insertados
-        message: 'Photographies uploaded successfully',
-      };
-    } catch (error) {
-      throw new BadRequestException(error.message);
+    return {
+      data: photographiesData,
+      message: 'Photographies uploaded successfully',
+    };
+  }
+
+  private async generateUniqueCode(): Promise<string> {
+    const existingCodes = new Set(
+      (await this.prismaService.photography.findMany({ select: { code: true } }))
+        .map((p) => p.code),
+    );
+
+    let code: string;
+    do {
+      code = generateRandomAlphanumericCode(3);
+    } while (existingCodes.has(code) || BANNED_WORDS.includes(code));
+
+    return code;
+  }
+
+  private async generateUniqueCodes(count: number): Promise<string[]> {
+    const existingCodes = new Set(
+      (await this.prismaService.photography.findMany({ select: { code: true } }))
+        .map((p) => p.code),
+    );
+
+    const codes: string[] = [];
+    const usedCodes = new Set<string>();
+
+    for (let i = 0; i < count; i++) {
+      let code: string;
+      do {
+        code = generateRandomAlphanumericCode(3);
+      } while (existingCodes.has(code) || usedCodes.has(code) || BANNED_WORDS.includes(code));
+      usedCodes.add(code);
+      codes.push(code);
     }
+
+    return codes;
   }
 
   async getPhotographies(query: FindAllPhotographiesDto) {
-    const { order = 'asc', printed } = query;
+    const { order = 'asc', printed, eventId } = query;
+
+    // If no eventId specified, use the active event
+    let resolvedEventId = eventId;
+    if (!resolvedEventId) {
+      const activeEvent = await this.prismaService.event.findFirst({
+        where: { isActive: true },
+        select: { id: true },
+      });
+      if (activeEvent) {
+        resolvedEventId = activeEvent.id;
+      }
+    }
 
     const photographies = await this.prismaService.photography.findMany({
       where: {
@@ -136,6 +162,7 @@ export class PhotographiesService {
                   { printedAt: { isSet: false } },
                 ],
               }),
+        ...(resolvedEventId ? { eventId: resolvedEventId } : {}),
       },
       orderBy: {
         createdAt: order,
@@ -181,6 +208,58 @@ export class PhotographiesService {
     };
   }
 
+  async getCompositeImage(id: string) {
+    const photography = await this.prismaService.photography.findUnique({
+      where: { id },
+      include: { event: true },
+    });
+
+    if (!photography) throw new NotFoundException('Photography not found');
+
+    if (!photography.event || !photography.event.framePublicId) {
+      throw new BadRequestException(
+        'Photography has no associated event or the event has no frame configured',
+      );
+    }
+
+    const event = photography.event;
+
+    const [photoBuffer, frameBuffer] = await Promise.all([
+      this.storageService.getFileBuffer(photography.public_id),
+      this.storageService.getFileBuffer(event.framePublicId),
+    ]);
+
+    const compositeBuffer = await this.imageProcessorService.composeFrameWithPhoto({
+      photoBuffer,
+      frameBuffer,
+      photoX: event.photoX,
+      photoY: event.photoY,
+      photoWidth: event.photoWidth,
+      photoHeight: event.photoHeight,
+    });
+
+    const compositeUpload = await this.storageService.uploadBuffer(
+      compositeBuffer,
+      `composite-${photography.code}.png`,
+      this.getEventFolder(event, 'composites'),
+    );
+
+    return {
+      data: {
+        originalUrl: photography.url,
+        compositeUrl: compositeUpload.url,
+        compositePublicId: compositeUpload.publicId,
+        frameConfig: {
+          photoX: event.photoX,
+          photoY: event.photoY,
+          photoWidth: event.photoWidth,
+          photoHeight: event.photoHeight,
+        },
+      },
+      message: 'Composite image generated successfully',
+    };
+  }
+
   async delete(id: string) {
     const photography = await this.prismaService.photography.findUnique({
       where: {
@@ -191,7 +270,7 @@ export class PhotographiesService {
     if (!photography) throw new NotFoundException('Photography not found');
 
     await Promise.all([
-      this.cloudinaryService.deleteFiles([photography.public_id]),
+      this.storageService.deleteFiles([photography.public_id]),
       this.prismaService.photography.delete({
         where: {
           id,
@@ -216,7 +295,7 @@ export class PhotographiesService {
         .map((_, index) => {
           const start = index * 100;
           const end = start + 100;
-          return this.cloudinaryService.deleteFiles(
+          return this.storageService.deleteFiles(
             photographies.slice(start, end).map((photo) => photo.public_id),
           );
         }),
@@ -238,7 +317,7 @@ export class PhotographiesService {
     });
 
     if (photographies.length === 0)
-      throw new NotFoundException('Photographies not found');
+      throw new NotFoundException('Photographies were not found');
 
     const requests = Math.ceil(photographies.length / 100);
 
@@ -255,7 +334,7 @@ export class PhotographiesService {
         .map((_, index) => {
           const start = index * 100;
           const end = start + 100;
-          return this.cloudinaryService.deleteFiles(
+          return this.storageService.deleteFiles(
             photographies.slice(start, end).map((photo) => photo.public_id),
           );
         }),
@@ -264,6 +343,70 @@ export class PhotographiesService {
     return {
       message: 'Photographies deleted successfully',
       data: null,
+    };
+  }
+
+  async generateComposites(ids: string[], baseWidth: number) {
+    if (!ids.length) {
+      throw new BadRequestException('At least one photography ID is required');
+    }
+
+    const event = await this.getActiveEvent();
+
+    if (!event.framePublicId) {
+      throw new BadRequestException('Active event has no frame configured');
+    }
+
+    const photographies = await this.prismaService.photography.findMany({
+      where: { id: { in: ids } },
+    });
+
+    if (photographies.length === 0) {
+      throw new NotFoundException('No photographies found');
+    }
+
+    const frameBuffer = await this.storageService.getFileBuffer(event.framePublicId);
+
+    const composites = await Promise.all(
+      photographies.map(async (photo) => {
+        const photoBuffer = await this.storageService.getFileBuffer(photo.public_id);
+
+        const compositeBuffer = await this.imageProcessorService.composeForPrint({
+          photoBuffer,
+          frameBuffer,
+          photoX: event.photoX,
+          photoY: event.photoY,
+          photoWidth: event.photoWidth,
+          photoHeight: event.photoHeight,
+          code: photo.code,
+          codeShow: event.codeShow ?? true,
+          codeX: event.codeX ?? 10,
+          codeY: event.codeY ?? 10,
+          codeColor: event.codeColor ?? '#333333',
+          codeFontSize: event.codeFontSize ?? 10,
+          codeFontFamily: event.codeFontFamily ?? 'Oswald',
+          codeFontWeight: event.codeFontWeight ?? 'bold',
+          baseWidth,
+        });
+
+        const folder = this.getEventFolder(event, 'composites');
+        const uploaded = await this.storageService.uploadBuffer(
+          compositeBuffer,
+          `print-${photo.code}.png`,
+          folder,
+        );
+
+        return {
+          id: photo.id,
+          code: photo.code,
+          compositeUrl: uploaded.url,
+        };
+      }),
+    );
+
+    return {
+      data: composites,
+      message: 'Composites generated successfully',
     };
   }
 

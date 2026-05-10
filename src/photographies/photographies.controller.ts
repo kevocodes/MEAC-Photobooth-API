@@ -10,7 +10,6 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { PhotographiesService } from './photographies.service';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { ApiResponse } from '../common/types/response.type';
@@ -21,6 +20,7 @@ import {
   DeletePhotographiesByIdsDTO,
   FindAllPhotographiesDto,
 } from './dtos/photographies.dto';
+import { PhotographiesService } from './photographies.service';
 
 @Controller('photographies')
 export class PhotographiesController {
@@ -32,7 +32,6 @@ export class PhotographiesController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['image'],
       properties: {
         image: {
           type: 'string',
@@ -42,19 +41,17 @@ export class PhotographiesController {
     },
   })
   async uploadPhotography(
-    @UploadedFile(getParseImagePipe())
-    image: Express.Multer.File,
+    @UploadedFile(getParseImagePipe()) image: Express.Multer.File,
   ): Promise<ApiResponse> {
     return await this.photographiesService.uploadPhotography(image);
   }
 
   @Post('upload-multiple')
-  @UseInterceptors(FilesInterceptor('images'))
+  @UseInterceptors(FilesInterceptor('images', 10))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['images'],
       properties: {
         images: {
           type: 'array',
@@ -67,14 +64,14 @@ export class PhotographiesController {
     },
   })
   async uploadPhotographies(
-    @UploadedFiles(getParseImagePipe())
-    images: Express.Multer.File[],
+    @UploadedFiles(getParseImagePipe()) images: Express.Multer.File[],
   ): Promise<ApiResponse> {
     return await this.photographiesService.uploadPhotographies(images);
   }
 
-  @ApiQuery({ name: 'order', required: false, type: 'string', enum: ['asc', 'desc'] })
-  @ApiQuery({ name: 'printed', required: false, type: 'boolean' })
+  @ApiQuery({ name: 'order', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({ name: 'printed', required: false })
+  @ApiQuery({ name: 'eventId', required: false, description: 'Filter by event ID. If not provided, returns photos from the active event.' })
   @Get()
   async getPhotographies(
     @Query() query: FindAllPhotographiesDto,
@@ -96,6 +93,13 @@ export class PhotographiesController {
     return await this.photographiesService.getPhotographyByCode(code);
   }
 
+  @Get(':id/composite')
+  async getCompositeImage(
+    @Param('id', MongoIdPipe) id: string,
+  ): Promise<ApiResponse> {
+    return await this.photographiesService.getCompositeImage(id);
+  }
+
   @Delete('/all')
   async deleteAll(): Promise<ApiResponse> {
     return await this.photographiesService.deleteAll();
@@ -106,6 +110,22 @@ export class PhotographiesController {
     @Body() body: DeletePhotographiesByIdsDTO,
   ): Promise<ApiResponse> {
     return await this.photographiesService.deleteByIds(body.ids);
+  }
+
+  @Post('/composites')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        baseWidth: { type: 'number' },
+      },
+    },
+  })
+  async generateComposites(
+    @Body() body: { ids: string[]; baseWidth: number },
+  ): Promise<ApiResponse> {
+    return await this.photographiesService.generateComposites(body.ids, body.baseWidth);
   }
 
   @Post('/confirm-printed')
